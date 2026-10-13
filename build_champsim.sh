@@ -190,6 +190,14 @@ else
 fi
 echo
 
+
+patch_replacement_signatures() {
+    for file in replacement/*_replacement.cc; do
+        sed -i -E \
+            '/_update_replacement_state\(/s/uint8_t hit[[:space:]]*\)/uint8_t hit, uint8_t is_instr)/' \
+            "$file"
+    done
+}
 # Change prefetchers and replacement policy
 cp branch/${BRANCH}.bpred branch/branch_predictor.cc
 cp prefetcher/${L1I_PREFETCHER}.l1i_pref prefetcher/l1i_prefetcher.cc
@@ -207,6 +215,8 @@ cp replacement/${LLC_REPLACEMENT}.llc_repl replacement/llc_replacement.cc
 cp replacement/${ITLB_REPLACEMENT}.itlb_repl replacement/itlb_replacement.cc
 cp replacement/${DTLB_REPLACEMENT}.dtlb_repl replacement/dtlb_replacement.cc
 cp replacement/${STLB_REPLACEMENT}.stlb_repl replacement/stlb_replacement.cc
+
+patch_replacement_signatures
 
 
 
@@ -274,3 +284,5 @@ cp replacement/lru.llc_repl replacement/llc_replacement.cc
 cp replacement/lru.itlb_repl replacement/itlb_replacement.cc
 cp replacement/lru.dtlb_repl replacement/dtlb_replacement.cc
 cp replacement/lru.stlb_repl replacement/stlb_replacement.cc
+
+patch_replacement_signatures
