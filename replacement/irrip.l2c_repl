@@ -1,3 +1,4 @@
+// Final I-RRIP policy
 #include "cache.h"
 
 static constexpr uint32_t INSTR_FILL_RRPV = 2;
