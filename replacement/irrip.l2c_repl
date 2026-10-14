@@ -8,8 +8,8 @@ static constexpr uint32_t WB_FILL_RRPV = 3;
 static constexpr uint32_t INSTR_HIT_RRPV = 0;
 static constexpr uint32_t DATA_HIT_RRPV = 2;
 
-static constexpr bool DATA_FIRST_EVICT = true;
-static constexpr bool WB_HIT_UNCHANGED = true;
+static constexpr bool DATA_FIRST_EVICT = true; //This ensures that data lines are evicted before instruction lines.
+static constexpr bool WB_HIT_UNCHANGED = true; //This keeps the RRPV unchanged when a writeback hits in the cache.
 
 #define maxRRPV 3
 uint32_t l2_rrpv[L2C_SET][L2C_WAY];
@@ -29,6 +29,7 @@ void CACHE::l2c_initialize_replacement()
 // find replacement victim
 uint32_t CACHE::l2c_find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set, const BLOCK *current_set, uint64_t ip, uint64_t full_addr, uint32_t type)
 {   
+    //If an invalid line is available, then use it.
     for(uint32_t i = 0; i < L2C_WAY; i++) {
         if (!current_set[i].valid) return i;
     }
@@ -41,7 +42,6 @@ uint32_t CACHE::l2c_find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set, c
                 }
             }
         }
-
         for (int i=0; i<L2C_WAY; i++)
             if (l2_rrpv[set][i] == maxRRPV) {
                 return i;
@@ -93,6 +93,8 @@ void CACHE::l2c_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t wa
         if (type == WRITEBACK) {
             if (WB_HIT_UNCHANGED) return;
         }
+
+        //The below code ensures that instruction hits get higher priority than data hits according to given values
         if (is_instr) {
             l2_rrpv[set][way] = INSTR_HIT_RRPV;
         }
@@ -104,6 +106,8 @@ void CACHE::l2c_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t wa
         if (type == WRITEBACK) {
             l2_rrpv[set][way] = WB_FILL_RRPV;
         }
+
+        // New instruction lines should less likely to be evicted than data lines.
         else if (is_instr) {
             l2_rrpv[set][way] = INSTR_FILL_RRPV;
         }
