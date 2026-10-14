@@ -1,0 +1,178 @@
+#include "cache.h"
+
+// Constants from task 2a
+static constexpr uint32_t INSTR_FILL_RRPV = 2;
+static constexpr uint32_t DATA_FILL_RRPV  = 3;
+static constexpr uint32_t WB_FILL_RRPV    = 3;
+
+static constexpr uint32_t INSTR_HIT_RRPV  = 0;
+static constexpr uint32_t DATA_HIT_RRPV   = 2;
+
+static constexpr bool DATA_FIRST_EVICT    = true;
+static constexpr bool WB_HIT_UNCHANGED    = true;
+
+// Baseline RRIP constants
+static constexpr uint32_t RRIP_FILL_RRPV  = 2; // (maxRRPV - 1)
+static constexpr uint32_t RRIP_HIT_RRPV   = 0;
+
+// set dueling and dynamic switching parameters
+static constexpr double   THRESHOLD       = 0.25;
+//1 in 32 stride , means for 1024 l2c sets = 32 leader sets 
+static constexpr uint32_t LEADER_STRIDE   = 32;
+static constexpr uint64_t EPOCH_LIMIT     = 8192;
+
+#define maxRRPV 3
+uint32_t l2_rrpv[L2C_SET][L2C_WAY];
+
+// set dueling counters tracked only on leader sets
+uint64_t leader_instr_accesses = 0;
+uint64_t leader_instr_misses   = 0;
+uint64_t leader_total_accesses = 0;
+uint64_t leader_total_misses   = 0;
+
+// helper function to check if a set is a leader set
+inline bool is_leader_set(uint32_t set)
+{
+    return (set % LEADER_STRIDE) == 0;
+}
+
+// helper function to compute the decision metric from leader stes
+// formula = (instr. accesses + instr. misses) / (total accesses + total misses)
+inline bool use_irrip_for_follower()
+{
+    uint64_t denom = leader_total_accesses + leader_total_misses;
+    if (denom == 0) return false; // Default to baseline RRIP until leader sets warm up
+
+    double ratio = static_cast<double>(leader_instr_accesses + leader_instr_misses) / static_cast<double>(denom);
+    return (ratio > THRESHOLD);
+}
+
+// initializing replacement state
+void CACHE::l2c_initialize_replacement()
+{
+    cout << "Initialize Dynamic IRRIP state for L2C (Threshold = " << THRESHOLD 
+         << ", Leader Sets = " << (L2C_SET / LEADER_STRIDE) << ")" << endl;
+
+    for (int i = 0; i < L2C_SET; i++) {
+        for (int j = 0; j < L2C_WAY; j++) {
+            l2_rrpv[i][j] = maxRRPV;
+        }
+    }
+
+    leader_instr_accesses = 0;
+    leader_instr_misses   = 0;
+    leader_total_accesses = 0;
+    leader_total_misses   = 0;
+}
+
+// find replacement victim
+uint32_t CACHE::l2c_find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set, const BLOCK *current_set, uint64_t ip, uint64_t full_addr, uint32_t type)
+{
+    // checking for any invalid way
+    for (uint32_t i = 0; i < L2C_WAY; i++) {
+        if (!current_set[i].valid) return i;
+    }
+
+    // leader sets always run on rrip , and other sets follow i-rrip only if ratio > threshold
+    bool run_irrip = (!is_leader_set(set)) && use_irrip_for_follower();
+
+    while (1) {
+        // solve i-rrip tie breaker , evict data block first in i-rrip
+        if (run_irrip && DATA_FIRST_EVICT) {
+            for (uint32_t i = 0; i < L2C_WAY; i++) {
+                if (!current_set[i].instruction && l2_rrpv[set][i] == maxRRPV) {
+                    return i;
+                }
+            }
+        }
+
+        // rrip victim search
+        for (int i = 0; i < L2C_WAY; i++) {
+            if (l2_rrpv[set][i] == maxRRPV) {
+                return i;
+            }
+        }
+
+        // if no maxRRPV found , increment all the rrvps
+        for (int i = 0; i < L2C_WAY; i++) {
+            if (l2_rrpv[set][i] < maxRRPV) l2_rrpv[set][i]++;
+        }
+    }
+
+    assert(0);
+    return 0;
+}
+
+// called on every cache hit and cache fill
+void CACHE::l2c_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit, uint8_t is_instr)
+{
+    if ((type == WRITEBACK) && ip)
+        assert(0);
+
+    //updating set dualing counters , except for writebacks 
+    if (is_leader_set(set) && (type != WRITEBACK)) {
+        leader_total_accesses++;
+        if (!hit) {
+            leader_total_misses++;
+        }
+
+        if (is_instr) {
+            leader_instr_accesses++;
+            if (!hit) {
+                leader_instr_misses++;
+            }
+        }
+
+        // periodically halve counters so the ratio tracks current workload phases
+        if (leader_total_accesses >= EPOCH_LIMIT) {
+            leader_instr_accesses >>= 1;
+            leader_instr_misses   >>= 1;
+            leader_total_accesses >>= 1;
+            leader_total_misses   >>= 1;
+        }
+    }
+
+    // policy selection  , if leader sets then rrip , if not then dynamic
+    bool run_irrip = false;
+    if (!is_leader_set(set)) {
+        run_irrip = use_irrip_for_follower();
+    }
+
+    // apply replacement state update
+    if (run_irrip) {
+        // i-rrip mode
+        if (hit) {
+            if (type == WRITEBACK) {
+                if (WB_HIT_UNCHANGED) return;
+            }
+            if (is_instr) {
+                l2_rrpv[set][way] = INSTR_HIT_RRPV;
+            } else {
+                l2_rrpv[set][way] = DATA_HIT_RRPV;
+            }
+        } else {
+            if (type == WRITEBACK) {
+                l2_rrpv[set][way] = WB_FILL_RRPV;
+            } else if (is_instr) {
+                l2_rrpv[set][way] = INSTR_FILL_RRPV;
+            } else {
+                l2_rrpv[set][way] = DATA_FILL_RRPV;
+            }
+        }
+    } else {
+        // rrip mode
+        if (hit && (type == WRITEBACK))
+            return;
+
+        if (hit) {
+            l2_rrpv[set][way] = RRIP_HIT_RRPV;  // 0
+        } else {
+            l2_rrpv[set][way] = RRIP_FILL_RRPV; // maxRRPV - 1 = 2
+        }
+    }
+}
+
+// use this function to print out your own stats at the end of simulation
+void CACHE::l2c_replacement_final_stats() {
+    
+}
