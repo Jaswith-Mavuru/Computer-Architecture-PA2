@@ -16,7 +16,7 @@ static constexpr uint32_t RRIP_FILL_RRPV  = 2; // (maxRRPV - 1)
 static constexpr uint32_t RRIP_HIT_RRPV   = 0;
 
 // set dueling and dynamic switching parameters
-static constexpr double   THRESHOLD       = 0.25;
+static constexpr double   THRESHOLD       = 0.1;
 //1 in 32 stride , means for 1024 l2c sets = 32 leader sets 
 static constexpr uint32_t LEADER_STRIDE   = 32; //Fine tuned
 static constexpr uint64_t EPOCH_LIMIT     = 8192;
